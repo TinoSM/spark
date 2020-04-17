@@ -39,6 +39,7 @@ import org.apache.hadoop.hive.ql.processors.{CommandProcessor, CommandProcessorF
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.hive.serde.serdeConstants
 
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.SparkSession
@@ -700,6 +701,26 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
       }
     }
 
+    object ExtractableBroadcastValues {
+      private lazy val valueToLiteralString: PartialFunction[Any, String] = {
+        case value: Byte => value.toString
+        case value: Short => value.toString
+        case value: Int => value.toString
+        case value: Long => value.toString
+        case value: UTF8String => quoteStringLiteral(value.toString)
+      }
+
+      def unapply(values: Broadcast[Set[Any]]): Option[Seq[String]] = {
+        val extractables = values.value.toSeq.map(valueToLiteralString.lift)
+        if (extractables.nonEmpty && extractables.forall(_.isDefined)) {
+          Some(extractables.map(_.get))
+        } else {
+          None
+        }
+      }
+    }
+
+
     object SupportedAttribute {
       // hive varchar is treated as catalyst string, but hive varchar can't be pushed down.
       private val varcharKeys = table.getPartitionKeys.asScala
@@ -742,6 +763,11 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
 
       case InSet(ExtractAttribute(SupportedAttribute(name)), ExtractableValues(values))
           if useAdvanced =>
+        Some(convertInToOr(name, values))
+
+      case BroadcastInSet(
+          ExtractAttribute(SupportedAttribute(name)), ExtractableBroadcastValues(values))
+        if useAdvanced =>
         Some(convertInToOr(name, values))
 
       case op @ SpecialBinaryComparison(

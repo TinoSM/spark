@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions
 
 import scala.collection.immutable.TreeSet
 
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions.BindReferences.bindReference
@@ -435,7 +436,7 @@ case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with
 
   override def nullable: Boolean = child.nullable || hasNull
 
-  protected override def nullSafeEval(value: Any): Any = {
+  protected[predicates] override def nullSafeEval(value: Any): Any = {
     if (set.contains(value)) {
       true
     } else if (hasNull) {
@@ -461,12 +462,12 @@ case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with
     }
   }
 
-  private def canBeComputedUsingSwitch: Boolean = child.dataType match {
+  private[predicates] def canBeComputedUsingSwitch: Boolean = child.dataType match {
     case ByteType | ShortType | IntegerType | DateType => true
     case _ => false
   }
 
-  private def genCodeWithSet(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+  private[predicates] def genCodeWithSet(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     nullSafeCodeGen(ctx, ev, c => {
       val setTerm = ctx.addReferenceObj("set", set)
       val setIsNull = if (hasNull) {
@@ -483,7 +484,7 @@ case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with
 
   // spark.sql.optimizer.inSetSwitchThreshold has an appropriate upper limit,
   // so the code size should not exceed 64KB
-  private def genCodeWithSwitch(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+  private[predicates] def genCodeWithSwitch(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     val caseValuesGen = hset.filter(_ != null).map(Literal(_).genCode(ctx))
     val valueGen = child.genCode(ctx)
 
@@ -521,6 +522,41 @@ case class InSet(child: Expression, hset: Set[Any]) extends UnaryExpression with
     val valueSQL = child.sql
     val listSQL = hset.toSeq.map(Literal(_).sql).mkString(", ")
     s"($valueSQL IN ($listSQL))"
+  }
+}
+
+
+/**
+ * Wrapped version of Inset which doesn't transfer the whole set across the network
+ * but a user-provided Broadcasted version of it
+ */
+case class BroadcastInSet(child: Expression, _hset: Broadcast[scala.collection.Iterable[_]])
+  extends UnaryExpression with Predicate {
+
+  @transient private lazy val delegatedInset = InSet(child, _hset.value.toSet)
+
+  override def nullable: Boolean = delegatedInset.nullable
+
+  protected override def nullSafeEval(value: Any): Any = {
+    delegatedInset.nullSafeEval(value)
+  }
+
+  override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    delegatedInset.doGenCode(ctx, ev)
+  }
+
+  private def genCodeWithSet(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    delegatedInset.genCodeWithSet(ctx, ev)
+  }
+
+  // spark.sql.optimizer.inSetSwitchThreshold has an appropriate upper limit,
+  // so the code size should not exceed 64KB
+  private def genCodeWithSwitch(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    delegatedInset.genCodeWithSwitch(ctx, ev)
+  }
+
+  override def sql: String = {
+    delegatedInset.sql
   }
 }
 

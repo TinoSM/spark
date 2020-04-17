@@ -483,6 +483,10 @@ object DataSourceStrategy {
       val toScala = CatalystTypeConverters.createToScalaConverter(e.dataType)
       Some(sources.In(name, set.toArray.map(toScala)))
 
+    case expressions.BroadcastInSet(e @ PushableColumn(name), set) =>
+      val toScala = CatalystTypeConverters.createToScalaConverter(e.dataType)
+      Some(sources.In(name, set.value.toArray.map(toScala)))
+
     // Because we only convert In to InSet in Optimizer when there are more than certain
     // items. So it is possible we still get an In expression here that needs to be pushed
     // down.

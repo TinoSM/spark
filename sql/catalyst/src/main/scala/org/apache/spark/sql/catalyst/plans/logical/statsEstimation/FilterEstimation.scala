@@ -175,6 +175,9 @@ case class FilterEstimation(plan: Filter) extends Logging {
       case InSet(ar: Attribute, set) =>
         evaluateInSet(ar, set, update)
 
+      case BroadcastInSet(ar: Attribute, set) =>
+        evaluateInSet(ar, set.value.toSet, update)
+
       // In current stage, we don't have advanced statistics such as sketches or histograms.
       // As a result, some operator can't estimate `nullCount` accurately. E.g. left outer join
       // estimation does not accurately update `nullCount` currently.

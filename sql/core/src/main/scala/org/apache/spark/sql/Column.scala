@@ -21,6 +21,7 @@ import scala.collection.JavaConverters._
 import scala.language.implicitConversions
 
 import org.apache.spark.annotation.Stable
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.encoders.{encoderFor, ExpressionEncoder}
@@ -834,6 +835,28 @@ class Column(val expr: Expression) extends Logging {
     } else {
       In(expr, values.toSeq.map(lit(_).expr))
     }
+  }
+
+  /**
+   *
+   * isIn to use when your collection is too big to fit into tasks, you can just broadcast it
+   *
+   * A boolean expression that is evaluated to true if the value of this expression is contained
+   * by the provided collection.
+   *
+   * Note: Since the type of the elements in the collection are inferred only during the run time,
+   * the elements will be "up-casted" to the most common type for comparison.
+   * For eg:
+   *   1) In the case of "Int vs String", the "Int" will be up-casted to "String" and the
+   * comparison will look like "String vs String".
+   *   2) In the case of "Float vs Double", the "Float" will be up-casted to "Double" and the
+   * comparison will look like "Double vs Double"
+   *
+   * @group expr_ops
+   * @since 2.4.0
+   */
+  def isInBroadcastCollection(values: Broadcast[scala.collection.Iterable[_]]): Column = withExpr {
+    BroadcastInSet(expr, values)
   }
 
   /**
